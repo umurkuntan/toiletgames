@@ -1,0 +1,94 @@
+name: Android Build
+
+on:
+  workflow_dispatch:
+    inputs:
+      islem:
+        description: 'Yapilacak islem (ilk seferde anahtar-uret, sonra derle)'
+        type: choice
+        options:
+          - derle
+          - anahtar-uret
+        default: derle
+
+jobs:
+  anahtar:
+    if: ${{ inputs.islem == 'anahtar-uret' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Imza anahtari uret
+        env:
+          KS_PASS: ${{ secrets.KEYSTORE_PASSWORD }}
+        run: |
+          if [ -z "$KS_PASS" ]; then echo "HATA: KEYSTORE_PASSWORD secret tanimli degil"; exit 1; fi
+          keytool -genkeypair -v -keystore upload.keystore -alias upload \
+            -keyalg RSA -keysize 2048 -validity 10000 \
+            -storepass "$KS_PASS" -keypass "$KS_PASS" \
+            -dname "CN=Tuvalet Oyunlari, O=Tuvalet Oyunlari, C=TR"
+          base64 -w 0 upload.keystore > keystore_base64.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: anahtar
+          path: keystore_base64.txt
+
+  derle:
+    if: ${{ inputs.islem == 'derle' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Web dosyalarini hazirla
+        run: |
+          mkdir -p www
+          cp index.html www/
+          if [ -f manifest.json ]; then cp manifest.json www/; fi
+
+      - name: Bagimliliklari kur
+        run: npm install
+
+      - name: Android projesi olustur
+        run: |
+          npx cap add android
+          npx cap sync android
+
+      - name: AdMob App ID ekle ve surum kodunu ayarla
+        run: |
+          sed -i 's#</application>#<meta-data android:name="com.google.android.gms.ads.APPLICATION_ID" android:value="ca-app-pub-8313181831885508~8594303630"/></application>#' android/app/src/main/AndroidManifest.xml
+          sed -i "s/versionCode 1/versionCode ${{ github.run_number }}/" android/app/build.gradle
+          grep -n "versionCode" android/app/build.gradle
+          grep -n "APPLICATION_ID" android/app/src/main/AndroidManifest.xml
+
+      - name: AAB derle
+        run: |
+          cd android
+          chmod +x gradlew
+          ./gradlew bundleRelease
+
+      - name: AAB imzala
+        env:
+          KS_B64: ${{ secrets.KEYSTORE_BASE64 }}
+          KS_PASS: ${{ secrets.KEYSTORE_PASSWORD }}
+        run: |
+          if [ -z "$KS_B64" ] || [ -z "$KS_PASS" ]; then echo "HATA: KEYSTORE_BASE64 veya KEYSTORE_PASSWORD secret eksik"; exit 1; fi
+          echo "$KS_B64" | base64 -d > upload.keystore
+          cp android/app/build/outputs/bundle/release/app-release.aab tuvalet-oyunlari.aab
+          jarsigner -sigalg SHA256withRSA -digestalg SHA-256 \
+            -keystore upload.keystore -storepass "$KS_PASS" -keypass "$KS_PASS" \
+            tuvalet-oyunlari.aab upload
+          jarsigner -verify tuvalet-oyunlari.aab | head -n 3
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tuvalet-oyunlari-aab
+          path: tuvalet-oyunlari.aab
