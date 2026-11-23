@@ -1,0 +1,8 @@
+{
+  "appId": "com.tuvaletoyunlari.app",
+  "appName": "Tuvalet Oyunları",
+  "webDir": "www",
+  "android": {
+    "allowMixedContent": false
+  }
+}
